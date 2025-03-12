@@ -1,0 +1,201 @@
+---
+title: "Swathi_markdown"
+author: "Swathi_Nadendla"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+# Load necessary libraries
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+
+# Part 1: Data Inspection
+
+# Step 1: Read the input files
+genotypes <- read_tsv("fang_et_al_genotypes.txt", col_types = cols(.default = "c"))
+positions <- read_tsv("snp_position.txt", col_types = cols(.default = "c"))
+
+# CSV files for easier inspection
+write.csv(genotypes, "readable_fang_et_al_genotypes.csv", row.names = FALSE)
+write.csv(positions, "readable_snp_position.csv", row.names = FALSE)
+
+# Step 2: Extract relevant columns
+cut_snp_position <- select(positions, SNP_ID, Chromosome, Position)
+
+# Step 3: Separate maize and teosinte data
+maize_groups <- c("ZMMIL", "ZMMLR", "ZMMMR")
+teosinte_groups <- c("ZMPBA", "ZMPIL", "ZMPJA")
+
+# Function to process group data
+process_group_data <- function(genotypes, groups, prefix) {
+  group_data <- genotypes %>% filter(Group %in% groups)
+  
+  # Transpose the data
+  transposed_data <- as.data.frame(t(group_data), stringsAsFactors = FALSE)
+  colnames(transposed_data) <- transposed_data[1, ]
+  transposed_data <- transposed_data[-1, ]
+  
+  # Add SNP_IDs and join with SNP positions
+  transposed_data <- cbind(SNP_ID = rownames(transposed_data), transposed_data)
+  rownames(transposed_data) <- NULL
+  joined_data <- inner_join(cut_snp_position, transposed_data, by = "SNP_ID")
+  
+  # Save joined data
+  write.csv(joined_data, paste0("joined_", prefix, "_snp.csv"), row.names = FALSE)
+  
+  # Extract unknown and multiple matches
+  unknown_data <- joined_data %>% filter(grepl("unknown", Chromosome) | grepl("unknown", Position))
+  write.csv(unknown_data, paste0("unknown_joined_", prefix, "_snp.csv"), row.names = FALSE)
+  
+  multiple_data <- joined_data %>% filter(grepl("multiple", Chromosome) | grepl("multiple", Position))
+  write.csv(multiple_data, paste0("multiple_joined_", prefix, "_snp.csv"), row.names = FALSE)
+  
+  # Process each chromosome
+  output_files <- lapply(1:10, function(chr) {
+    chr_data <- joined_data %>% filter(Chromosome == as.character(chr))
+    
+    # Convert Position to numeric and filter out NA
+    chr_data$Position <- suppressWarnings(as.numeric(chr_data$Position))
+    chr_data <- chr_data[!is.na(chr_data$Position), ]
+    
+    if (nrow(chr_data) == 0) {
+      return(NULL)
+    }
+    
+    # Save ascending order file
+    asc_data <- chr_data %>% arrange(Position)
+    asc_file <- paste0(prefix, "_chr", chr, "_asc.csv")
+    write.csv(asc_data, asc_file, row.names = FALSE)
+    
+    # Save descending order file
+    desc_data <- chr_data %>% arrange(desc(Position))
+    desc_file <- paste0(prefix, "_chr", chr, "_desc.csv")
+    write.csv(desc_data, desc_file, row.names = FALSE)
+    
+    # Replace missing data symbols and save
+    desc_data[desc_data == "?/?"] <- "-/-"
+    edited_desc_file <- paste0("edited_", prefix, "_chr", chr, "_desc.csv")
+    write.csv(desc_data, edited_desc_file, row.names = FALSE)
+    
+    return(list(asc_file = asc_file, desc_file = desc_file, edited_desc_file = edited_desc_file))
+  })
+  
+  return(output_files)
+}
+
+# Process maize and teosinte data
+maize_output_files <- process_group_data(genotypes, maize_groups, "maize")
+teosinte_output_files <- process_group_data(genotypes, teosinte_groups, "teosinte")
+
+list(maize_output_files, teosinte_output_files)
+```
+
+
+## Including Plots
+
+```{r}
+# Part 2: Data Visualization
+
+# Convert Position to numeric and filter invalid entries
+positions <- positions %>%
+  mutate(Position = as.numeric(Position)) %>%
+  filter(!Chromosome %in% c("multiple", "unknown", "NA"), !is.na(Position))
+
+# Convert Chromosome to numeric for correct ordering
+positions <- positions %>%
+  mutate(Chromosome = as.numeric(as.character(Chromosome))) %>%
+  arrange(Chromosome)
+
+# Combine genotype and SNP position data
+genotypes_long <- genotypes %>%
+  pivot_longer(cols = -c(Sample_ID, Group), names_to = "SNP_ID", values_to = "Genotype")
+
+combined_data <- inner_join(genotypes_long, positions, by = "SNP_ID")
+
+# Create a column to indicate genotype types
+combined_data <- combined_data %>%
+  mutate(Genotype_Type = case_when(
+    Genotype %in% c("A/A", "C/C", "G/G", "T/T") ~ "Homozygous",
+    Genotype == "-" ~ "Missing",
+    TRUE ~ "Heterozygous"
+  ))
+
+# Prepare data for visualization
+maize_data <- combined_data %>% filter(Group %in% maize_groups)
+teosinte_data <- combined_data %>% filter(Group %in% teosinte_groups)
+
+# Calculate genotype frequencies
+genotype_frequencies <- combined_data %>%
+  group_by(Genotype_Type, Group) %>%
+  summarize(Frequency = n()) %>%
+  mutate(Proportion = Frequency / sum(Frequency))
+
+# Plot genotype frequencies
+ggplot(genotype_frequencies, aes(x = Group, y = Proportion, fill = Genotype_Type)) +
+  geom_bar(stat = "identity", position = "fill") +
+  theme_minimal() +
+  labs(title = "Distribution of Genotype Frequencies",
+       x = "Group",
+       y = "Proportion",
+       fill = "Genotype Type") +
+  scale_fill_manual(values = c("Homozygous" = "blue", "Heterozygous" = "green", "Missing" = "red"))
+
+# Ensure correct Chromosome order for boxplot
+ggplot(combined_data, aes(x = factor(Chromosome, levels = sort(unique(Chromosome))), 
+                          y = Position, fill = Group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Boxplot of SNP Positions Across Chromosomes",
+       x = "Chromosome",
+       y = "Position",
+       fill = "Group") +
+  scale_fill_manual(values = c("ZMMIL" = "blue", "ZMMLR" = "green", "ZMMMR" = "red",
+                               "ZMPBA" = "purple", "ZMPIL" = "orange", "ZMPJA" = "pink"))
+
+# Facetted density plot for SNP positions across chromosomes
+ggplot(data = combined_data, aes(x = Position, fill = factor(Chromosome))) +
+  geom_density(alpha = 0.5) +
+  scale_fill_discrete(name = "Chromosome") +
+  labs(x = "SNP Position", y = "Density") +
+  facet_wrap(~Chromosome, ncol = 5) +
+  theme_minimal()
+
+# Summary statistics for each sample
+sample_summary_data <- combined_data %>%
+  group_by(Sample_ID) %>%
+  summarize(
+    total_sites = n(),
+    homozygous_sites = sum(Genotype_Type == "Homozygous"),
+    heterozygous_sites = sum(Genotype_Type == "Heterozygous"),
+    missing_sites = sum(Genotype_Type == "Missing"),
+    prop_homozygous = homozygous_sites / total_sites,
+    prop_heterozygous = heterozygous_sites / total_sites,
+    prop_missing = missing_sites / total_sites
+  )
+
+# Plot proportions of homozygous, heterozygous, and missing data by sample
+ggplot(sample_summary_data, aes(x = Sample_ID)) +
+  geom_bar(aes(y = prop_homozygous, fill = "Homozygous"), alpha = 0.8, stat = "identity") +
+  geom_bar(aes(y = prop_heterozygous, fill = "Heterozygous"), alpha = 0.8, stat = "identity") +
+  geom_bar(aes(y = prop_missing, fill = "Missing"), alpha = 0.8, stat = "identity") +
+  scale_fill_manual(values = c("Homozygous" = "darkgreen", "Heterozygous" = "yellow", "Missing" = "gray")) +
+  labs(title = "Proportion of Genotype Types by Sample ID", x = "Sample ID", y = "Proportion")
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
