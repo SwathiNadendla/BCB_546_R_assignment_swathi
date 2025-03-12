@@ -1,0 +1,200 @@
+# Load necessary libraries
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+      # Part 1: Data inspection
+
+# Step 1: Read the input files
+genotypes <- read_tsv("fang_et_al_genotypes.txt", col_types = cols(.default = "c"))
+positions <- read_tsv("snp_position.txt", col_types = cols(.default = "c"))
+
+# CSV files for inspection for easier processing
+write.csv(genotypes, "readable_fang_et_al_genotypes.csv", row.names = FALSE)
+write.csv(positions, "readable_snp_position.csv", row.names = FALSE)
+
+# Step 2: Extract 3 columns mentioned
+cut_snp_position <- select(positions, SNP_ID, Chromosome, Position)
+
+# Step 3: Separate maize and teosinte data
+maize_groups <- c("ZMMIL", "ZMMLR", "ZMMMR")
+teosinte_groups <- c("ZMPBA", "ZMPIL", "ZMPJA")
+
+# Function to process group data
+process_group_data <- function(genotypes, groups, prefix) {
+  # Filter for the specific groups
+  group_data <- genotypes %>% filter(Group %in% groups)
+  
+  # Transpose the data
+  transposed_data <- t(group_data)
+  transposed_data <- as.data.frame(transposed_data, stringsAsFactors = FALSE)
+  colnames(transposed_data) <- transposed_data[1, ]
+  transposed_data <- transposed_data[-1, ]
+  
+  # Check transposed data has SNP_IDs aligned with cut_snp_position
+  transposed_data <- cbind(SNP_ID = rownames(transposed_data), transposed_data)
+  rownames(transposed_data) <- NULL
+  
+  # Join with SNP positions
+  # Only keep rows where SNP_IDs match ( I did this because earlier it was showing different lengths for both of them)
+  joined_data <- inner_join(cut_snp_position, transposed_data, by = "SNP_ID")
+  
+  # Joined data to CSV
+  write.csv(joined_data, paste0("joined_", prefix, "_snp.csv"), row.names = FALSE)
+  
+  # Extract unknown and multiple matches
+  unknown_data <- joined_data %>% filter(grepl("unknown", Chromosome) | grepl("unknown", Position))
+  write.csv(unknown_data, paste0("unknown_joined_", prefix, "_snp.csv"), row.names = FALSE)
+  
+  multiple_data <- joined_data %>% filter(grepl("multiple", Chromosome) | grepl("multiple", Position))
+  write.csv(multiple_data, paste0("multiple_joined_", prefix, "_snp.csv"), row.names = FALSE)
+  
+  # Process each chromosome
+  output_files <- lapply(1:10, function(chr) {
+    chr_data <- joined_data %>% filter(Chromosome == as.character(chr))
+    
+    # Position to numeric
+    chr_data$Position <- suppressWarnings(as.numeric(chr_data$Position))
+    
+    # Handle rows with NA
+    chr_data <- chr_data[!is.na(chr_data$Position), ]
+    
+    if (nrow(chr_data) == 0) {
+      return(NULL)
+    }
+    
+    # Write data in ascending order of position
+    asc_data <- chr_data %>% arrange(Position)
+    asc_file <- paste0(prefix, "_chr", chr, "_asc.csv")
+    write.csv(asc_data, asc_file, row.names = FALSE)
+    
+    # Verify ascending sort
+    if (all(diff(asc_data$Position) >= 0)) {
+      message(paste0("Ascending sort successful for chromosome ", chr))
+    } else {
+      message(paste0("Ascending sort failed for chromosome ", chr))
+    }
+    
+    # Write data in descending order of position
+    desc_data <- chr_data %>% arrange(desc(Position))
+    desc_file <- paste0(prefix, "_chr", chr, "_desc.csv")
+    write.csv(desc_data, desc_file, row.names = FALSE)
+    
+    # Verify descending sort
+    if (all(diff(desc_data$Position) <= 0)) {
+      message(paste0("Descending sort successful for chromosome ", chr))
+    } else {
+      message(paste0("Descending sort failed for chromosome ", chr))
+    }
+    
+    # Replace missing data symbols and write edited files
+    desc_data[desc_data == "?/?"] <- "-/-"
+    edited_desc_file <- paste0("edited_", prefix, "_chr", chr, "_desc.csv")
+    write.csv(desc_data, edited_desc_file, row.names = FALSE)
+    
+    return(list(asc_file = asc_file, desc_file = desc_file, edited_desc_file = edited_desc_file))
+  })
+  
+  return(output_files)
+}
+
+# Process maize and teosinte data
+maize_output_files <- process_group_data(genotypes, maize_groups, "maize")
+teosinte_output_files <- process_group_data(genotypes, teosinte_groups, "teosinte")
+
+list(maize_output_files, teosinte_output_files)
+
+                  # Part 2 Data visualization
+
+# Load necessary libraries
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+
+# Read the input files
+genotypes <- read_tsv("fang_et_al_genotypes.txt", col_types = cols(.default = "c"))
+positions <- read_tsv("snp_position.txt", col_types = cols(.default = "c"))
+
+# Convert Position to numeric and filter out invalid entries
+positions <- positions %>%
+  mutate(Position = as.numeric(Position)) %>%
+  filter(!Chromosome %in% c("multiple", "unknown", "NA"),
+         !is.na(Position))
+
+# Combine genotype and SNP position data
+genotypes_long <- genotypes %>%
+  pivot_longer(cols = -c(Sample_ID, Group), names_to = "SNP_ID", values_to = "Genotype")
+
+combined_data <- inner_join(genotypes_long, positions, by = "SNP_ID")
+
+# Create a new column to indicate homozygous or heterozygous sites
+combined_data <- combined_data %>%
+  mutate(Genotype_Type = case_when(
+    Genotype %in% c("A/A", "C/C", "G/G", "T/T") ~ "Homozygous",
+    Genotype == "-" ~ "Missing",
+    TRUE ~ "Heterozygous"
+  ))
+
+# Prepare data for visualizations
+maize_groups <- c("ZMMIL", "ZMMLR", "ZMMMR")
+teosinte_groups <- c("ZMPBA", "ZMPIL", "ZMPJA")
+
+maize_data <- combined_data %>% filter(Group %in% maize_groups)
+teosinte_data <- combined_data %>% filter(Group %in% teosinte_groups)
+# Calculate genotype frequencies
+genotype_frequencies <- combined_data %>%
+  group_by(Genotype_Type, Group) %>%
+  summarize(Frequency = n()) %>%
+  mutate(Proportion = Frequency / sum(Frequency))
+
+# Plot genotype frequencies
+ggplot(genotype_frequencies, aes(x = Group, y = Proportion, fill = Genotype_Type)) +
+  geom_bar(stat = "identity", position = "fill") +
+  theme_minimal() +
+  labs(title = "Distribution of Genotype Frequencies",
+       x = "Group",
+       y = "Proportion",
+       fill = "Genotype Type") +
+  scale_fill_manual(values = c("Homozygous" = "blue", "Heterozygous" = "green", "Missing" = "red"))
+# Plot boxplot of SNP positions across chromosomes
+ggplot(combined_data, aes(x = Chromosome, y = Position, fill = Group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Boxplot of SNP Positions Across Chromosomes",
+       x = "Chromosome",
+       y = "Position",
+       fill = "Group") +
+  scale_fill_manual(values = c("ZMMIL" = "blue", "ZMMLR" = "green", "ZMMMR" = "red",
+                               "ZMPBA" = "purple", "ZMPIL" = "orange", "ZMPJA" = "pink"))
+# Create facetted density plot for SNP positions on each chromosome
+ggplot(data = combined_data, aes(x = Position, fill = factor(Chromosome))) +
+  geom_density(alpha = 0.5) +
+  scale_fill_discrete(name = "Chromosome") +
+  labs(x = "SNP Position", y = "Density") +
+  facet_wrap(~Chromosome, ncol = 5) +
+  theme_minimal()
+# Calculate summary statistics for each sample
+sample_summary_data <- combined_data %>%
+  group_by(Sample_ID) %>%
+  summarize(
+    total_sites = n(),
+    homozygous_sites = sum(Genotype_Type == "Homozygous"),
+    heterozygous_sites = sum(Genotype_Type == "Heterozygous"),
+    missing_sites = sum(Genotype_Type == "Missing"),
+    prop_homozygous = homozygous_sites / total_sites,
+    prop_heterozygous = heterozygous_sites / total_sites,
+    prop_missing = missing_sites / total_sites
+  )
+
+# Plot proportions of homozygous, heterozygous, and missing data by sample
+ggplot(sample_summary_data, aes(x = Sample_ID)) +
+  geom_bar(aes(y = prop_homozygous, fill = "Homozygous"), alpha = 0.8, stat = "identity") +
+  geom_bar(aes(y = prop_heterozygous, fill = "Heterozygous"), alpha = 0.8, stat = "identity") +
+  geom_bar(aes(y = prop_missing, fill = "Missing"), alpha = 0.8, stat = "identity") +
+  scale_fill_manual(values = c("Homozygous" = "darkgreen", "Heterozygous" = "yellow", "Missing" = "gray")) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(x = "Sample ID", y = "Proportion", fill = "Site Type", 
+       title = "Proportion of Homozygous, Heterozygous, and Missing Sites by Sample ID")
