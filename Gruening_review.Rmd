@@ -1,0 +1,9 @@
+### Comments
+
+## Overall, it looks great and you included all the steps that were asked for the assignment. 
+## I was able to run all the code you provided 
+
+# I have some minor edits I would suggest. I am not sure if its necessarry to write csv to look at the data, you could just view it in R or use commands to look at it nicely. Maybe its just personal preference. 
+# This could also be personal preference, but maybe you could save the maize and teosinte files in two seperate folders, or four for increasing and decreasing order for each species.  
+
+# For the Visulaization part, your graphs look very nice. In the 'Proportion of Gentoype by SampleID, in the legend it says 'Missing' is grey but in the graph I dont see any grey. Maybe you filtered for 'Missing' before thats why it doesnt show up in the graph.
